@@ -12,13 +12,8 @@ import (
 	"encoding/json"
 	"sort"
 	"testing"
-
 	"time"
 
-	"github.com/DataDog/datadog-agent/pkg/aggregator/mocksender"
-	"github.com/DataDog/datadog-agent/pkg/collector/corechecks"
-	"github.com/DataDog/datadog-agent/pkg/metrics"
-	containersutil "github.com/DataDog/datadog-agent/pkg/util/containers"
 	"github.com/containerd/cgroups"
 	"github.com/containerd/containerd"
 	"github.com/containerd/containerd/api/types"
@@ -29,12 +24,16 @@ import (
 	prototypes "github.com/gogo/protobuf/types"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+
+	"github.com/DataDog/datadog-agent/pkg/aggregator/mocksender"
+	"github.com/DataDog/datadog-agent/pkg/collector/corechecks"
+	"github.com/DataDog/datadog-agent/pkg/metrics"
+	containersutil "github.com/DataDog/datadog-agent/pkg/util/containers"
 )
 
 type mockContainer struct {
 	containerd.Container
 	mockTask   func() (containerd.Task, error)
-	mockImage  func() (containerd.Image, error)
 	mockLabels func() (map[string]string, error)
 	mockInfo   func() (containers.Container, error)
 }
@@ -42,11 +41,6 @@ type mockContainer struct {
 // Task is from the containerd.Container interface
 func (cs *mockContainer) Task(context.Context, cio.Attach) (containerd.Task, error) {
 	return cs.mockTask()
-}
-
-// Image is from the containerd.Container interface
-func (cs *mockContainer) Image(context.Context) (containerd.Image, error) {
-	return cs.mockImage()
 }
 
 // Labels is from the containerd.Container interface
@@ -69,19 +63,8 @@ func (t *mockTaskStruct) Metrics(ctx context.Context) (*types.Metric, error) {
 	return t.mockMectric(ctx)
 }
 
-type mockImage struct {
-	imageName string
-	containerd.Image
-}
-
-// Name is from the Image interface
-func (i *mockImage) Name() string {
-	return i.imageName
-}
-
 // TestCollectTags checks the collectTags method
 func TestCollectTags(t *testing.T) {
-	img := &mockImage{}
 	tests := []struct {
 		name      string
 		labels    map[string]string
@@ -109,15 +92,10 @@ func TestCollectTags(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			cs := &mockContainer{
-				mockImage: func() (containerd.Image, error) {
-					img.imageName = test.imageName
-					return containerd.Image(img), nil
-				},
-				mockLabels: func() (map[string]string, error) {
-					return test.labels, nil
-				},
 				mockInfo: func() (containers.Container, error) {
 					ctn := containers.Container{
+						Image:  test.imageName,
+						Labels: test.labels,
 						Runtime: containers.RuntimeInfo{
 							Name: test.runtime,
 						},
@@ -304,20 +282,17 @@ func TestIsExcluded(t *testing.T) {
 	// GetShareFilter gives us the OOB exclusion of pause container images from most supported platforms
 	containerdCheck.filters, err = containersutil.GetSharedFilter()
 	require.NoError(t, err)
-	img := &mockImage{}
 	c := &mockContainer{
-		mockImage: func() (containerd.Image, error) {
-			img.imageName = "kubernetes/pause"
-			return containerd.Image(img), nil
+		mockInfo: func() (containers.Container, error) {
+			return containers.Container{Image: "kubernetes/pause"}, nil
 		},
 	}
 	// kubernetes/pause is excluded
 	isEc := isExcluded(c, context.Background(), containerdCheck.filters)
 	require.True(t, isEc)
 
-	c.mockImage = func() (containerd.Image, error) {
-		img.imageName = "kubernetes/pawz"
-		return containerd.Image(img), nil
+	c.mockInfo = func() (containers.Container, error) {
+		return containers.Container{Image: "kubernetes/pawz"}, nil
 	}
 	// kubernetes/pawz although not an available image (yet ?) is not ignored
 	isEc = isExcluded(c, context.Background(), containerdCheck.filters)
